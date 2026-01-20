@@ -10,7 +10,7 @@ import torch
 from .replay_buffer import PrioritizedReplayBuffer
 
 class SAC:
-    def __init__(self, buffer, state_dim, action_dim, hidden_dim, lr, gamma, tau, alpha, device):
+    def __init__(self, buffer, state_dim, action_dim, hidden_dim, lr, gamma, tau, alpha, device, max_grad_norm=1.0):
         self.actor = Actor(state_dim, action_dim, hidden_dim).to(device)
         self.critic_1 = Critic(state_dim, action_dim, hidden_dim).to(device)
         self.critic_2 = Critic(state_dim, action_dim, hidden_dim).to(device)
@@ -24,6 +24,7 @@ class SAC:
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=lr)
         self.gamma = gamma
         self.tau = tau
+        self.max_grad_norm = max_grad_norm
 
         self.is_prioritized_buffer = isinstance(buffer, PrioritizedReplayBuffer)
         
@@ -61,6 +62,8 @@ class SAC:
         self.critic_1_optimizer.zero_grad()
         self.critic_2_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic_1.parameters(), self.max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.critic_2.parameters(), self.max_grad_norm)
         self.critic_1_optimizer.step()
         self.critic_2_optimizer.step()
 
@@ -72,12 +75,14 @@ class SAC:
         actor_loss = (alpha * logp_pi - min_q_pi).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
         self.actor_optimizer.step()
 
         # alpha update
         alpha_loss = -(self.log_alpha * (logp_pi + self.target_entropy).detach()).mean()
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
+        torch.nn.utils.clip_grad_norm_([self.log_alpha], self.max_grad_norm)
         self.alpha_optimizer.step()
         self.alpha = self.log_alpha.exp()
 

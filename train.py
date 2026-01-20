@@ -8,6 +8,9 @@ from SAC.SAC import SAC
 from SAC.recorder import WandBRecorder
 import hockey.hockey_env as h_env
 from SAC.helpers import normalize_obs
+from League.league import League
+from League.opponents.self import SelfPlayOpponent
+import copy
 
 def train(config, checkpoint=None):
 
@@ -18,7 +21,11 @@ def train(config, checkpoint=None):
             config["sac"]["lr"], config["sac"]["gamma"], config["sac"]["tau"], 
             config["sac"]["alpha"], config["training"]["device"])
 
-    opponent = h_env.BasicOpponent(weak=False)
+    if checkpoint is not None:
+        print(f"Loading checkpoint from {checkpoint}")
+        sac.load(checkpoint)
+
+    league = League(config)
 
     time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_name = f"training_{time_stamp}"
@@ -37,8 +44,8 @@ def train(config, checkpoint=None):
     obs, info = env.reset(seed=42)
     obs = normalize_obs(obs)
 
-    global_step = 0
     total_reward = 0
+    total_games = 0
 
     wins = 0
     losses = 0
@@ -66,17 +73,16 @@ def train(config, checkpoint=None):
         }
 
         for step in range(config["training"]["episode_length"]):
-
-            global_step += 1
             episode_length += 1
 
-            env.render()
+            if not config["environment"]["headless"]:
+                env.render(mode="human")
 
             action_1 = sac.act(obs)
 
             # Get opponent action
             obs_agent2 = env.obs_agent_two()
-            action_2 = opponent.act(obs_agent2)
+            action_2 = league.act(obs_agent2)
 
             env_action = np.hstack([action_1, action_2])
 
@@ -100,16 +106,27 @@ def train(config, checkpoint=None):
                     episode_metrics[key].append(metrics[key])
 
             if terminated or truncated:
-
-                if last_info.get("winner", 0) == 1:
+                total_games += 1
+                if info.get("winner", 0) == 1:
                     wins += 1
-                elif last_info.get("winner", 0) == -1:
+                elif info.get("winner", 0) == -1:
                     losses += 1
                 else:
                     draws += 1
 
                 obs, info = env.reset()
                 obs = normalize_obs(obs)
+
+                last_info = info
+
+        obs, info = env.reset()
+        obs = normalize_obs(obs)
+        league.new_opponent()
+
+        if episode % config["training"]["add_opponent_freq"] == 0:
+            print(f"Adding opponent {episode}")
+            actor = copy.deepcopy(sac.actor)
+            league.add_opponent(SelfPlayOpponent(name=f"opponent_{episode}", Actor=actor))
         
         # Log accumulated training metrics at end of episode
         if episode_metrics["actor_loss"]:  # Only log if we had updates
@@ -137,7 +154,7 @@ def train(config, checkpoint=None):
                 "wins_total": wins,
                 "losses_total": losses,
                 "draws_total": draws,
-                "win_rate": wins / (episode + 1),
+                "win_rate": wins / total_games,
             }
         )
 
@@ -152,7 +169,7 @@ def train(config, checkpoint=None):
         # Print progress
         if (episode + 1) % 10 == 0:
             print(f"Episode {episode + 1} | Reward: {total_reward:.2f} | "
-                  f"W/L/D: {wins}/{losses}/{draws} | Win Rate: {wins/(episode+1):.2%}")
+                  f"W/L/D: {wins}/{losses}/{draws} | Win Rate: {wins/total_games:.2%}")
         
         total_reward = 0
     

@@ -40,6 +40,8 @@ class WandBRecorder:
         checkpoint_dir: str = "checkpoints",
         checkpoint_freq: int = 100,
         save_best: bool = True,
+        save_local: bool = True,
+        save_wandb: bool = True,
         tags: Optional[List[str]] = None,
         notes: Optional[str] = None,
         mode: str = "online",
@@ -55,22 +57,28 @@ class WandBRecorder:
             checkpoint_dir: Local directory for saving checkpoints
             checkpoint_freq: Save checkpoint every N episodes
             save_best: Whether to save checkpoint on best performance
+            save_local: Whether to save checkpoints locally
+            save_wandb: Whether to upload checkpoints to WandB
             tags: Optional list of tags for the run
             notes: Optional notes/description for the run
             mode: WandB mode ('online', 'offline', 'disabled')
             entity: WandB entity (username or team name)
         """
         self.project = project
-        self.checkpoint_dir = Path(checkpoint_dir)
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_freq = checkpoint_freq
         self.save_best = save_best
+        self.save_local = save_local
+        self.save_wandb = save_wandb
         
         # Generate run name if not provided
         if run_name is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             run_name = f"sac_{timestamp}"
         self.run_name = run_name
+        
+        # Create checkpoint directory with run name
+        self.checkpoint_dir = Path(checkpoint_dir) / run_name
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize WandB
         self.run = wandb.init(
@@ -89,7 +97,6 @@ class WandBRecorder:
         self.best_win_rate = 0.0
         
         # Tracking counters
-        self.global_step = 0
         self.episode_count = 0
         self.update_count = 0
         
@@ -102,14 +109,14 @@ class WandBRecorder:
         self.custom_loggers: Dict[str, Callable] = {}
         
         # Define metrics for better visualization in WandB
-        wandb.define_metric("train/*", step_metric="global_step")
+        wandb.define_metric("train/*", step_metric="episode")
         wandb.define_metric("episode/*", step_metric="episode")
-        wandb.define_metric("buffer/*", step_metric="global_step")
-        wandb.define_metric("system/*", step_metric="global_step")
+        wandb.define_metric("buffer/*", step_metric="episode")
+        wandb.define_metric("system/*", step_metric="episode")
     
     def log_step(
         self,
-        global_step: int,
+        episode: int,
         metrics: Dict[str, Any],
         prefix: str = "step"
     ) -> None:
@@ -117,13 +124,13 @@ class WandBRecorder:
         Log per-step metrics (e.g., action statistics, observations).
         
         Args:
-            global_step: Current global step counter
+            episode: Current episode number
             metrics: Dictionary of metrics to log
             prefix: Prefix for metric names
         """
-        self.global_step = global_step
+        self.episode_count = episode
         
-        log_dict = {"global_step": global_step}
+        log_dict = {"episode": episode}
         
         for key, value in metrics.items():
             if isinstance(value, (int, float, np.number)):
@@ -136,7 +143,7 @@ class WandBRecorder:
         # Apply custom loggers
         for name, logger_fn in self.custom_loggers.items():
             try:
-                custom_metrics = logger_fn(global_step, metrics)
+                custom_metrics = logger_fn(episode, metrics)
                 if custom_metrics:
                     log_dict.update(custom_metrics)
             except Exception as e:
@@ -230,14 +237,11 @@ class WandBRecorder:
         
         log_dict = {
             "episode": episode,
-            "global_step": self.global_step,
             "episode/reward": reward,
             "episode/length": length,
             "episode/winner": winner,
             "episode/rolling_reward": rolling_reward,
             "episode/rolling_win_rate": rolling_win_rate,
-            "system/episodes_total": episode,
-            "system/steps_total": self.global_step,
         }
         
         # Log environment info metrics if provided
@@ -300,7 +304,7 @@ class WandBRecorder:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
-        Save a model checkpoint and upload to WandB artifacts.
+        Save a model checkpoint locally and/or upload to WandB artifacts.
         
         Args:
             agent: The SAC agent with a save() method
@@ -320,30 +324,43 @@ class WandBRecorder:
         filepath = self.checkpoint_dir / filename
         
         # Save the model locally
-        agent.save(str(filepath))
+        if self.save_local:
+            agent.save(str(filepath))
+            print(f"Checkpoint saved locally: {filepath}")
         
-        # Create wandb artifact
-        artifact_name = f"{self.run_name}_checkpoint"
-        if is_best:
-            artifact_name += "_best"
-        
-        artifact = wandb.Artifact(
-            name=artifact_name,
-            type="model",
-            description=f"SAC checkpoint at step {step}",
-            metadata={
-                "step": step,
-                "episode": self.episode_count,
-                "is_best": is_best,
-                "best_reward": self.best_reward,
-                **(metadata or {}),
-            }
-        )
-        
-        artifact.add_file(str(filepath))
-        wandb.log_artifact(artifact)
-        
-        print(f"Checkpoint saved: {filepath} (uploaded to WandB)")
+        # Upload to WandB
+        if self.save_wandb:
+            # If not saving locally, save to a temp location for wandb upload
+            if not self.save_local:
+                import tempfile
+                temp_dir = Path(tempfile.mkdtemp())
+                filepath = temp_dir / filename
+                agent.save(str(filepath))
+            
+            # Create wandb artifact
+            artifact_name = f"{self.run_name}_checkpoint"
+            if is_best:
+                artifact_name += "_best"
+            
+            # Sanitize best_reward for JSON serialization (handle -inf, inf, nan)
+            best_reward_json = self.best_reward if np.isfinite(self.best_reward) else None
+            
+            artifact = wandb.Artifact(
+                name=artifact_name,
+                type="model",
+                description=f"SAC checkpoint at step {step}",
+                metadata={
+                    "step": step,
+                    "episode": self.episode_count,
+                    "is_best": is_best,
+                    "best_reward": best_reward_json,
+                    **(metadata or {}),
+                }
+            )
+            
+            artifact.add_file(str(filepath))
+            wandb.log_artifact(artifact)
+            print(f"Checkpoint uploaded to WandB: {artifact_name}")
         
         return str(filepath)
     
@@ -355,7 +372,7 @@ class WandBRecorder:
         """
         Register a custom metric logger for extensibility.
         
-        The logger function receives (global_step, data) and should return
+        The logger function receives (episode, data) and should return
         a dict of metrics to log, or None.
         
         Args:
@@ -365,7 +382,7 @@ class WandBRecorder:
         Example:
             recorder.add_logger(
                 "action_stats",
-                lambda step, data: {
+                lambda episode, data: {
                     "custom/action_entropy": compute_entropy(data["actions"])
                 }
             )
@@ -392,7 +409,7 @@ class WandBRecorder:
         self,
         name: str,
         values: Union[np.ndarray, torch.Tensor, List[float]],
-        step: Optional[int] = None,
+        episode: Optional[int] = None,
     ) -> None:
         """
         Log a histogram of values.
@@ -400,7 +417,7 @@ class WandBRecorder:
         Args:
             name: Name for the histogram
             values: Array of values to create histogram from
-            step: Optional step value (uses global_step if not provided)
+            episode: Optional episode value (uses episode_count if not provided)
         """
         if isinstance(values, torch.Tensor):
             values = values.detach().cpu().numpy()
@@ -409,7 +426,7 @@ class WandBRecorder:
         
         wandb.log({
             name: wandb.Histogram(values),
-            "global_step": step or self.global_step,
+            "episode": episode or self.episode_count,
         })
     
     def log_video(
@@ -417,7 +434,7 @@ class WandBRecorder:
         name: str,
         frames: np.ndarray,
         fps: int = 30,
-        step: Optional[int] = None,
+        episode: Optional[int] = None,
     ) -> None:
         """
         Log a video from frames.
@@ -426,7 +443,7 @@ class WandBRecorder:
             name: Name for the video
             frames: Array of frames (T, H, W, C) or (T, C, H, W)
             fps: Frames per second
-            step: Optional step value
+            episode: Optional episode value
         """
         # Ensure frames are in (T, H, W, C) format
         if frames.shape[1] in [1, 3, 4]:  # Likely (T, C, H, W)
@@ -434,7 +451,7 @@ class WandBRecorder:
         
         wandb.log({
             name: wandb.Video(frames, fps=fps, format="mp4"),
-            "global_step": step or self.global_step,
+            "episode": episode or self.episode_count,
         })
     
     def watch_model(
@@ -463,7 +480,6 @@ class WandBRecorder:
         if not quiet:
             print(f"Finishing WandB run: {self.run_name}")
             print(f"Total episodes: {self.episode_count}")
-            print(f"Total steps: {self.global_step}")
             print(f"Best rolling reward: {self.best_reward:.2f}")
         
         wandb.finish()

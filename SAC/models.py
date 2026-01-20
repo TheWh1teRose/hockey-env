@@ -35,6 +35,11 @@ class Actor(nn.Module):
         action = torch.tanh(u)
         return action, log_prob
 
+    def act(self, state):
+        # deterministic action
+        mu, _ = self.forward(state)
+        return torch.tanh(mu)
+
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim):
         super(Critic, self).__init__()

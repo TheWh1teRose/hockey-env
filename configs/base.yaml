@@ -1,13 +1,14 @@
 # Environment settings
 environment:
   env_mode: "NORMAL"
-  opponent: "BasicOpponent_strong"
+  headless: true
 
 # Training settings
 training:
   num_episodes: 1000
-  episode_length: 1000
-  checkpoint_freq: 50
+  episode_length: 2000
+  checkpoint_freq: 100
+  add_opponent_freq: 50
   device: "cpu"
 
 # SAC hyperparameters
@@ -23,3 +24,13 @@ buffer:
   size: 100000
   batch_size: 100
   min_size: 1000
+
+# League settings
+init_opponents:
+  - type: self
+    name: "self"
+    model_path: "checkpoints/training_20260120_132028/checkpoint_step_50.pt"
+  - type: handcrafted
+    name: "basic_strong"
+    strength: strong
+  

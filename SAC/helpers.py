@@ -6,3 +6,4 @@ def normalize_obs(obs):
             2.0, 2.0, 10.0, 10.0, 4.0 ,4.0])
 
     return obs / scaling
+
