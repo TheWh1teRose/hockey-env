@@ -2,6 +2,7 @@ import yaml
 import argparse
 import numpy as np
 import gymnasium as gym
+from gymnasium.vector import AsyncVectorEnv
 from datetime import datetime
 from SAC.replay_buffer import PrioritizedReplayBuffer
 from SAC.SAC import SAC
@@ -12,12 +13,24 @@ from League.league import League
 from League.opponents.self import SelfPlayOpponent
 import copy
 
+def make_env():
+    """Factory function to create a HockeyEnv instance."""
+    def _init():
+        return h_env.HockeyEnv()
+    return _init
+
 def train(config, checkpoint=None):
+    num_envs = config["training"]["num_envs"]
+    
+    # Create vectorized environment with callable factories
+    envs = AsyncVectorEnv([make_env() for _ in range(num_envs)])
+    
+    # Get observation and action dimensions from first env
+    obs_dim = envs.single_observation_space.shape[0]
+    action_dim = 4  # HockeyEnv uses 4 actions per player
 
-    env = h_env.HockeyEnv()
-
-    buffer = PrioritizedReplayBuffer(config["buffer"]["size"], env.observation_space.shape[0], 4)
-    sac = SAC(buffer, env.observation_space.shape[0], 4, config["sac"]["hidden_dim"], 
+    buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim)
+    sac = SAC(buffer, obs_dim, action_dim, config["sac"]["hidden_dim"], 
             config["sac"]["lr"], config["sac"]["gamma"], config["sac"]["tau"], 
             config["sac"]["alpha"], config["training"]["device"])
 
@@ -38,20 +51,25 @@ def train(config, checkpoint=None):
         checkpoint_freq=config["training"]["checkpoint_freq"],
         save_best=False,
         tags=["sac", "training"],
-        notes="SAC training",
+        notes="SAC training with parallel environments",
     )
 
-    obs, info = env.reset(seed=42)
-    obs = normalize_obs(obs)
+    # Reset all environments
+    obs, info = envs.reset(seed=42)
+    obs = normalize_obs(obs)  # Shape: (num_envs, obs_dim)
 
-    total_reward = 0
+    # Per-environment tracking
+    env_rewards = np.zeros(num_envs)
+    env_lengths = np.zeros(num_envs, dtype=int)
+
+    # Global statistics
     total_games = 0
-
     wins = 0
     losses = 0
     draws = 0
 
     for episode in range(config["training"]["num_episodes"]):
+        episode_total_reward = 0.0
         episode_length = 0
         last_info = info
 
@@ -76,27 +94,38 @@ def train(config, checkpoint=None):
             episode_length += 1
 
             if not config["environment"]["headless"]:
-                env.render(mode="human")
+                envs.render()
 
+            # Get actions for all environments from SAC agent
+            # obs shape: (num_envs, obs_dim), action_1 shape: (num_envs, action_dim)
             action_1 = sac.act(obs)
 
-            # Get opponent action
-            obs_agent2 = env.obs_agent_two()
-            action_2 = league.act(obs_agent2)
+            # Get opponent observations using the call method for vectorized envs
+            obs_agent2 = np.array(envs.call("obs_agent_two"))  # Shape: (num_envs, obs_dim)
+            
+            # Get opponent actions for all environments (batched)
+            action_2 = league.act(obs_agent2)  # Shape: (num_envs, action_dim)
 
+            # Combine actions: (num_envs, 8) for both players
             env_action = np.hstack([action_1, action_2])
 
-            # Take a step in the environment
-            next_obs, reward, terminated, truncated, info = env.step(env_action)
+            # Take a step in all environments
+            next_obs, rewards, terminated, truncated, infos = envs.step(env_action)
             next_obs = normalize_obs(next_obs)
-            total_reward += reward
+            
+            # Update per-env tracking
+            env_rewards += rewards
+            env_lengths += 1
+            episode_total_reward += rewards.sum()
 
-            # Accumulate info rewards
+            # Accumulate info rewards (infos is a dict of arrays for vectorized envs)
             for key in episode_info_rewards:
-                if key in info:
-                    episode_info_rewards[key] += info[key]
+                if key in infos:
+                    episode_info_rewards[key] += np.sum(infos[key])
 
-            buffer.add(obs, action_1, reward, next_obs, terminated)
+            # Add batch of transitions to replay buffer
+            # done = terminated (episode ends due to terminal state)
+            buffer.add_batch(obs, action_1, rewards, next_obs, terminated)
             obs = next_obs
 
             # Update SAC and accumulate metrics
@@ -105,31 +134,32 @@ def train(config, checkpoint=None):
                 for key in episode_metrics:
                     episode_metrics[key].append(metrics[key])
 
-            if terminated or truncated:
-                total_games += 1
-                if info.get("winner", 0) == 1:
-                    wins += 1
-                elif info.get("winner", 0) == -1:
-                    losses += 1
-                else:
-                    draws += 1
+            # Handle episode terminations for each env
+            done_mask = terminated | truncated
+            if done_mask.any():
+                for env_idx in np.where(done_mask)[0]:
+                    total_games += 1
+                    
+                    # Get winner for this specific environment
+                    winner = infos.get("winner", np.zeros(num_envs))[env_idx]
+                    if winner == 1:
+                        wins += 1
+                    elif winner == -1:
+                        losses += 1
+                    else:
+                        draws += 1
+                    
+                    # Reset tracking for this env
+                    env_rewards[env_idx] = 0
+                    env_lengths[env_idx] = 0
 
-                obs, info = env.reset()
-                obs = normalize_obs(obs)
+                # Store last info for logging
+                last_info = infos
 
-                last_info = info
+        ### End of Episode ###
 
-        obs, info = env.reset()
-        obs = normalize_obs(obs)
-        league.new_opponent()
-
-        if episode % config["training"]["add_opponent_freq"] == 0:
-            print(f"Adding opponent {episode}")
-            actor = copy.deepcopy(sac.actor)
-            league.add_opponent(SelfPlayOpponent(name=f"opponent_{episode}", Actor=actor))
-        
         # Log accumulated training metrics at end of episode
-        if episode_metrics["actor_loss"]:  # Only log if we had updates
+        if episode_metrics["actor_loss"]:
             recorder.log_update(
                 episode=episode + 1,
                 actor_loss=np.mean(episode_metrics["actor_loss"]),
@@ -146,17 +176,38 @@ def train(config, checkpoint=None):
         # Log episode metrics with accumulated info rewards
         is_best = recorder.log_episode(
             episode=episode + 1,
-            reward=total_reward,
-            length=episode_length,
-            winner=last_info.get("winner", 0),
-            info=episode_info_rewards,  # Pass accumulated rewards instead of last_info
+            opponent=league.get_opponent_name(),
+            reward=episode_total_reward,
+            length=episode_length * num_envs,
+            winner=last_info.get("winner", np.zeros(num_envs))[0] if isinstance(last_info.get("winner", 0), np.ndarray) else last_info.get("winner", 0),
+            info=episode_info_rewards,
             extra_metrics={
                 "wins_total": wins,
                 "losses_total": losses,
                 "draws_total": draws,
-                "win_rate": wins / total_games,
+                "win_rate": wins / max(total_games, 1),
+                "num_envs": num_envs,
+                "total_games": total_games,
             }
         )
+
+        # Reset all envs at end of episode
+        obs, info = envs.reset()
+        obs = normalize_obs(obs)
+        env_rewards[:] = 0
+        env_lengths[:] = 0
+        
+        league.new_opponent()
+
+        if episode % config["training"]["add_opponent_freq"] == 0 and episode > 0:
+            print(f"Adding opponent {episode}")
+            actor = copy.deepcopy(sac.actor)
+            league.add_opponent(SelfPlayOpponent(name=f"opponent_{episode}", Actor=actor))
+
+        total_games = 0
+        wins = 0
+        looses = 0
+        draws = 0
 
         # Log buffer stats periodically
         if (episode + 1) % 10 == 0:
@@ -168,11 +219,12 @@ def train(config, checkpoint=None):
         
         # Print progress
         if (episode + 1) % 10 == 0:
-            print(f"Episode {episode + 1} | Reward: {total_reward:.2f} | "
-                  f"W/L/D: {wins}/{losses}/{draws} | Win Rate: {wins/total_games:.2%}")
-        
-        total_reward = 0
+            print(f"Episode {episode + 1} | Reward: {episode_total_reward:.2f} | "
+                  f"W/L/D: {wins}/{losses}/{draws} | Win Rate: {wins/max(total_games, 1):.2%} | "
+                  f"Games: {total_games}")
     
+    envs.close()
+
 
 if __name__ == "__main__":
 

@@ -21,10 +21,32 @@ class SelfPlayOpponent(Opponent):
         self.name = name
 
     def act(self, obs: np.ndarray) -> np.ndarray:
+        """
+        Get actions for observations.
+        
+        Supports both single observations (obs_dim,) and batched observations (batch_size, obs_dim).
+        
+        Args:
+            obs: Observation(s) with shape (obs_dim,) or (batch_size, obs_dim)
+            
+        Returns:
+            Actions with shape (action_dim,) or (batch_size, action_dim)
+        """
         with torch.no_grad():
             obs = normalize_obs(obs)
-            obs = torch.from_numpy(obs).float().to(self.device)
-            return self.model.act(obs)
+            obs_tensor = torch.from_numpy(obs).float().to(self.device)
+            
+            # Handle both single and batched observations
+            is_single = obs_tensor.dim() == 1
+            if is_single:
+                obs_tensor = obs_tensor.unsqueeze(0)
+            
+            actions = self.model.act(obs_tensor)
+            
+            if is_single:
+                actions = actions.squeeze(0)
+            
+            return actions
 
     def _load_actor(self,checkpoint_path: str, device: str) -> Actor:
         """Load only the actor network from a checkpoint."""

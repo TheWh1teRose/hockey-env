@@ -457,6 +457,57 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # Call parent add method
         super().add(state, action, reward, next_state, done)
     
+    def add_batch(
+        self,
+        states: Union[np.ndarray, torch.Tensor],
+        actions: Union[np.ndarray, torch.Tensor],
+        rewards: Union[np.ndarray, torch.Tensor],
+        next_states: Union[np.ndarray, torch.Tensor],
+        dones: Union[np.ndarray, torch.Tensor],
+        priorities: Optional[Union[np.ndarray, torch.Tensor]] = None
+    ) -> None:
+        """
+        Add a batch of transitions with priorities.
+        
+        More efficient than adding transitions one by one when collecting
+        from vectorized environments.
+        
+        Args:
+            states: Batch of current states (batch_size, state_dim)
+            actions: Batch of actions (batch_size, action_dim)
+            rewards: Batch of rewards (batch_size,) or (batch_size, 1)
+            next_states: Batch of next states (batch_size, state_dim)
+            dones: Batch of done flags (batch_size,) or (batch_size, 1)
+            priorities: Optional batch of priorities. If None, uses max priority
+        """
+        if isinstance(states, torch.Tensor):
+            batch_size = states.shape[0]
+        else:
+            batch_size = states.shape[0]
+        
+        # Set priorities for the batch
+        if priorities is None:
+            batch_priorities = np.full(batch_size, self.max_priority, dtype=np.float32)
+        else:
+            if isinstance(priorities, torch.Tensor):
+                batch_priorities = priorities.cpu().numpy().flatten()
+            else:
+                batch_priorities = np.asarray(priorities).flatten()
+        
+        # Calculate indices for circular buffer
+        if self.ptr + batch_size <= self.capacity:
+            # Simple case: no wraparound
+            self.priorities[self.ptr:self.ptr + batch_size] = batch_priorities
+        else:
+            # Wraparound case
+            first_part = self.capacity - self.ptr
+            second_part = batch_size - first_part
+            self.priorities[self.ptr:] = batch_priorities[:first_part]
+            self.priorities[:second_part] = batch_priorities[first_part:]
+        
+        # Call parent add_batch method
+        super().add_batch(states, actions, rewards, next_states, dones)
+    
     def sample(
         self,
         batch_size: int

@@ -103,7 +103,7 @@ class WandBRecorder:
         # Rolling stats for smoothing
         self._recent_rewards: List[float] = []
         self._recent_wins: List[int] = []
-        self._rolling_window = 100
+        self._rolling_window = 20
         
         # Custom loggers for extensibility
         self.custom_loggers: Dict[str, Callable] = {}
@@ -204,6 +204,7 @@ class WandBRecorder:
     def log_episode(
         self,
         episode: int,
+        opponent: str,
         reward: float,
         length: int,
         winner: int = 0,
@@ -239,9 +240,9 @@ class WandBRecorder:
             "episode": episode,
             "episode/reward": reward,
             "episode/length": length,
-            "episode/winner": winner,
             "episode/rolling_reward": rolling_reward,
             "episode/rolling_win_rate": rolling_win_rate,
+            f"opponents/{opponent}_winrate": extra_metrics.win_rate,
         }
         
         # Log environment info metrics if provided

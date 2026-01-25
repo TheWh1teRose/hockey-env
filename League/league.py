@@ -20,7 +20,7 @@ class League:
 
         init_opponents = []
         for opponent_config in config["init_opponents"]:
-            if opponent_config["type"] == "self":
+            if opponent_config["type"] == "checkpoint":
                 init_opponents.append(SelfPlayOpponent(opponent_config["name"], opponent_config["model_path"], config["training"]["device"]))
             elif opponent_config["type"] == "handcrafted":
                 init_opponents.append(HandcraftedOpponent(opponent_config["name"], opponent_config["strength"]))
@@ -32,6 +32,17 @@ class League:
 
 
     def act(self, obs: np.ndarray) -> np.ndarray:
+        """
+        Get actions for observations.
+        
+        Supports both single observations (obs_dim,) and batched observations (batch_size, obs_dim).
+        
+        Args:
+            obs: Observation(s) with shape (obs_dim,) or (batch_size, obs_dim)
+            
+        Returns:
+            Actions with shape (action_dim,) or (batch_size, action_dim)
+        """
         return self.current_opponent.act(obs)
 
     def add_opponent(self, opponent: Opponent):
@@ -58,3 +69,6 @@ class League:
     def new_opponent(self):
         self.current_opponent = random.choice(self.opponents)
         print(f"New opponent: {self.current_opponent.get_name()}")
+    
+    def get_opponent_name(self):
+        return self.current_opponent.get_name()
