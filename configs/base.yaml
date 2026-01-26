@@ -5,12 +5,12 @@ environment:
 
 # Training settings
 training:
-  num_envs: 32  # Increased for 36 CPU cores (leave some for system)
+  num_envs: 16  # Reduced - 32 had too much subprocess overhead for Box2D physics
   num_episodes: 1000
   episode_length: 2000
   checkpoint_freq: 50
   add_opponent_freq: 50
-  cal_matchmaking_freq: 10
+  cal_matchmaking_freq: 10  
   device: "cuda:0"
 
 # SAC hyperparameters
@@ -27,11 +27,11 @@ buffer:
   batch_size: 1024  # Large batch for better GPU utilization on L40S
   min_size: 10000
 
-# GPU optimization settings (L40S optimized)
+# GPU optimization settings (CPU-bound workload - HockeyEnv physics is the bottleneck)
 gpu_optimization:
-  use_amp: true  # Mixed precision training (1.5-3x speedup)
-  use_compile: true  # torch.compile() JIT optimization (1.2-2x speedup)
-  updates_per_step: 4  # Multiple gradient updates per env step
+  use_amp: true  # Mixed precision - still helps when GPU is used
+  use_compile: false  # Disable - compile overhead not worth it at 4% GPU util
+  updates_per_step: 1  # Back to 1 - more updates just slows down CPU-bound loop
 
 # League settings
 init_opponents:

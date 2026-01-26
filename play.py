@@ -158,7 +158,11 @@ def main():
         config_opponent = config["init_opponents"][0]
         if config_opponent["type"] == "checkpoint":
             opponent_type = "self"
-            opponent = SelfPlayOpponent("opponent", config_opponent["model_path"], config["training"]["device"])
+            opponent = SelfPlayOpponent(
+                name="opponent", 
+                model_path=config_opponent["model_path"], 
+                device=config["training"]["device"]
+            )
         elif config_opponent["type"] == "handcrafted":
             if config_opponent["strength"] == "weak":
                 opponent_type = "basic_weak"
@@ -169,7 +173,11 @@ def main():
         else:
             raise ValueError(f"Unknown opponent type: {config_opponent['type']}")
 
-    player = SelfPlayOpponent("player", args.checkpoint, config["training"]["device"])
+    player = SelfPlayOpponent(
+        name="player", 
+        model_path=args.checkpoint, 
+        device=config["training"]["device"]
+    )
 
     
     

@@ -21,7 +21,11 @@ class League:
         init_opponents = []
         for opponent_config in config["init_opponents"]:
             if opponent_config["type"] == "checkpoint":
-                init_opponents.append(SelfPlayOpponent(opponent_config["name"], opponent_config["model_path"], config["training"]["device"]))
+                init_opponents.append(SelfPlayOpponent(
+                    name=opponent_config["name"], 
+                    model_path=opponent_config["model_path"], 
+                    device=config["training"]["device"]
+                ))
             elif opponent_config["type"] == "handcrafted":
                 init_opponents.append(HandcraftedOpponent(opponent_config["name"], opponent_config["strength"]))
         

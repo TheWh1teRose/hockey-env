@@ -280,7 +280,7 @@ def train(config, checkpoint=None):
 
         if episode % config["training"]["cal_matchmaking_freq"] == 0 and episode > 0:
             actor = copy.deepcopy(sac.actor)
-            league.calculate_matchmaking(SelfPlayOpponent(name=f"opponent_{episode}", Actor=actor))
+            league.calculate_matchmaking(SelfPlayOpponent(name=f"opponent_{episode}", Actor=actor, device=device))
 
         # Reset all envs at end of episode
         obs, info = envs.reset()
@@ -293,7 +293,7 @@ def train(config, checkpoint=None):
         if episode % config["training"]["add_opponent_freq"] == 0 and episode > 0:
             print(f"Adding opponent {episode}")
             actor = copy.deepcopy(sac.actor)
-            league.add_opponent(SelfPlayOpponent(name=f"opponent_{episode}", Actor=actor))
+            league.add_opponent(SelfPlayOpponent(name=f"opponent_{episode}", Actor=actor, device=device))
 
         total_games = 0
         wins = 0
