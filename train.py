@@ -29,7 +29,7 @@ def train(config, checkpoint=None):
     obs_dim = envs.single_observation_space.shape[0]
     action_dim = 4  # HockeyEnv uses 4 actions per player
 
-    buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim)
+    buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim, device=config["training"]["device"])
     sac = SAC(buffer, obs_dim, action_dim, config["sac"]["hidden_dim"], 
             config["sac"]["lr"], config["sac"]["gamma"], config["sac"]["tau"], 
             config["sac"]["alpha"], config["training"]["device"])

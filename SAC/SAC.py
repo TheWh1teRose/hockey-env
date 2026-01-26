@@ -123,7 +123,7 @@ class SAC:
         }, path)
     
     def load(self, path):
-        data = torch.load(path)
+        data = torch.load(path, map_location=self.device, weights_only=False)
         self.actor.load_state_dict(data['actor'])
         self.critic_1.load_state_dict(data['critic_1'])
         self.critic_2.load_state_dict(data['critic_2'])
