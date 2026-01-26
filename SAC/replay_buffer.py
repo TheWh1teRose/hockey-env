@@ -159,7 +159,8 @@ class ReplayBuffer:
         Add a batch of transitions to the buffer.
         
         More efficient than adding transitions one by one when collecting
-        from vectorized environments.
+        from vectorized environments. Uses pinned memory and non-blocking
+        transfers for faster CPU->GPU data movement.
         
         Args:
             states: Batch of current states (batch_size, state_dim)
@@ -168,17 +169,29 @@ class ReplayBuffer:
             next_states: Batch of next states (batch_size, state_dim)
             dones: Batch of done flags (batch_size,) or (batch_size, 1)
         """
-        # Convert to tensors
+        # Convert to tensors with pin_memory for faster GPU transfer
+        use_pin = self.device.type == 'cuda'
+        
         if isinstance(states, np.ndarray):
             states = torch.from_numpy(states).float()
+            if use_pin:
+                states = states.pin_memory()
         if isinstance(actions, np.ndarray):
             actions = torch.from_numpy(actions).float()
+            if use_pin:
+                actions = actions.pin_memory()
         if isinstance(rewards, np.ndarray):
             rewards = torch.from_numpy(rewards).float()
+            if use_pin:
+                rewards = rewards.pin_memory()
         if isinstance(next_states, np.ndarray):
             next_states = torch.from_numpy(next_states).float()
+            if use_pin:
+                next_states = next_states.pin_memory()
         if isinstance(dones, np.ndarray):
             dones = torch.from_numpy(dones).float()
+            if use_pin:
+                dones = dones.pin_memory()
         
         batch_size = states.shape[0]
         
@@ -193,12 +206,12 @@ class ReplayBuffer:
         actions = actions.reshape(batch_size, -1)
         next_states = next_states.reshape(batch_size, -1)
         
-        # Move to device
-        states = states.to(self.device)
-        actions = actions.to(self.device)
-        rewards = rewards.to(self.device)
-        next_states = next_states.to(self.device)
-        dones = dones.to(self.device)
+        # Move to device with non_blocking for async transfer
+        states = states.to(self.device, non_blocking=True)
+        actions = actions.to(self.device, non_blocking=True)
+        rewards = rewards.to(self.device, non_blocking=True)
+        next_states = next_states.to(self.device, non_blocking=True)
+        dones = dones.to(self.device, non_blocking=True)
         
         # Calculate indices for circular buffer
         if self.ptr + batch_size <= self.capacity:
@@ -516,6 +529,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         Sample a batch based on priorities.
         
         Returns transitions along with importance sampling weights.
+        Uses non-blocking transfers for better GPU utilization.
         
         Args:
             batch_size: Number of transitions to sample
@@ -535,12 +549,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # Calculate importance sampling weights
         weights = (self.size * probs[indices]) ** (-self.beta)
         weights /= weights.max()  # Normalize
-        weights = torch.from_numpy(weights).float().to(self.device).unsqueeze(1)
+        
+        # Use pin_memory and non_blocking for faster transfer
+        weights = torch.from_numpy(weights.astype(np.float32)).pin_memory().to(self.device, non_blocking=True).unsqueeze(1)
         
         # Increment beta
         self.beta = min(1.0, self.beta + self.beta_increment)
         
-        indices_tensor = torch.from_numpy(indices).long().to(self.device)
+        indices_tensor = torch.from_numpy(indices.astype(np.int64)).pin_memory().to(self.device, non_blocking=True)
         
         return (
             self.states[indices_tensor],

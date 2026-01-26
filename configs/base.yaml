@@ -5,7 +5,7 @@ environment:
 
 # Training settings
 training:
-  num_envs: 12
+  num_envs: 32  # Increased for 36 CPU cores (leave some for system)
   num_episodes: 1000
   episode_length: 2000
   checkpoint_freq: 50
@@ -15,17 +15,23 @@ training:
 
 # SAC hyperparameters
 sac:
-  hidden_dim: 128
-  lr: 0.001
+  hidden_dim: 256  # Increased for better capacity (L40S has plenty of VRAM)
+  lr: 0.0003  # Slightly reduced for larger batch sizes
   gamma: 0.99
-  tau: 0.01
+  tau: 0.005  # Slightly reduced for smoother target updates
   alpha: 0.2
 
 # Replay buffer settings
 buffer:
-  size: 1000000
-  batch_size: 512
+  size: 2000000  # Increased buffer for better sample diversity
+  batch_size: 1024  # Large batch for better GPU utilization on L40S
   min_size: 10000
+
+# GPU optimization settings (L40S optimized)
+gpu_optimization:
+  use_amp: true  # Mixed precision training (1.5-3x speedup)
+  use_compile: true  # torch.compile() JIT optimization (1.2-2x speedup)
+  updates_per_step: 4  # Multiple gradient updates per env step
 
 # League settings
 init_opponents:

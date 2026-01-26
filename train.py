@@ -101,9 +101,22 @@ def train(config, checkpoint=None):
     action_dim = 4  # HockeyEnv uses 4 actions per player
 
     buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim, device=device)
-    sac = SAC(buffer, obs_dim, action_dim, config["sac"]["hidden_dim"], 
-            config["sac"]["lr"], config["sac"]["gamma"], config["sac"]["tau"], 
-            config["sac"]["alpha"], device)
+    
+    # GPU optimization settings
+    gpu_config = config.get("gpu_optimization", {})
+    sac = SAC(
+        buffer, obs_dim, action_dim, 
+        config["sac"]["hidden_dim"], 
+        config["sac"]["lr"], 
+        config["sac"]["gamma"], 
+        config["sac"]["tau"], 
+        config["sac"]["alpha"], 
+        device,
+        batch_size=config["buffer"].get("batch_size", 512),
+        use_amp=gpu_config.get("use_amp", True),
+        use_compile=gpu_config.get("use_compile", True),
+        updates_per_step=gpu_config.get("updates_per_step", 4)
+    )
 
     if checkpoint is not None:
         print(f"Loading checkpoint from {checkpoint}")
