@@ -104,9 +104,6 @@ def train(config, checkpoint=None):
     sac = SAC(buffer, obs_dim, action_dim, config["sac"]["hidden_dim"], 
             config["sac"]["lr"], config["sac"]["gamma"], config["sac"]["tau"], 
             config["sac"]["alpha"], device)
-    
-    # Verify everything is on GPU
-    verify_gpu_setup(sac, buffer, device)
 
     if checkpoint is not None:
         print(f"Loading checkpoint from {checkpoint}")
@@ -127,6 +124,9 @@ def train(config, checkpoint=None):
         tags=["sac", "training"],
         notes="SAC training with parallel environments",
     )
+
+    # Verify everything is on GPU
+    verify_gpu_setup(sac, buffer, device)
 
     # Reset all environments
     obs, info = envs.reset(seed=42)
