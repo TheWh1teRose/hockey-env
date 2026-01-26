@@ -12,6 +12,73 @@ from SAC.helpers import normalize_obs
 from League.league import League
 from League.opponents.self import SelfPlayOpponent
 import copy
+import torch
+
+
+def print_gpu_info():
+    """Print GPU availability and device information."""
+    print("\n" + "="*60)
+    print("GPU DIAGNOSTICS")
+    print("="*60)
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"Number of GPUs: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+            mem_total = torch.cuda.get_device_properties(i).total_memory / 1024**3
+            print(f"         Memory: {mem_total:.1f} GB")
+        print(f"Current device: {torch.cuda.current_device()}")
+    else:
+        print("WARNING: CUDA is NOT available! Training will run on CPU.")
+    print("="*60 + "\n")
+
+
+def verify_gpu_setup(sac, buffer, device):
+    """Verify that all components are on the correct device."""
+    print("\n" + "="*60)
+    print("VERIFYING GPU SETUP")
+    print("="*60)
+    print(f"Target device: {device}")
+    print()
+    
+    # Check SAC networks
+    print("SAC Networks:")
+    print(f"  Actor:          {next(sac.actor.parameters()).device}")
+    print(f"  Critic 1:       {next(sac.critic_1.parameters()).device}")
+    print(f"  Critic 2:       {next(sac.critic_2.parameters()).device}")
+    print(f"  Target Critic 1: {next(sac.target_critic_1.parameters()).device}")
+    print(f"  Target Critic 2: {next(sac.target_critic_2.parameters()).device}")
+    print(f"  log_alpha:      {sac.log_alpha.device}")
+    print(f"  target_entropy: {sac.target_entropy.device}")
+    print()
+    
+    # Check buffer
+    print("Replay Buffer:")
+    print(f"  Buffer device:  {buffer.device}")
+    print(f"  States tensor:  {buffer.states.device}")
+    print(f"  Actions tensor: {buffer.actions.device}")
+    print(f"  Buffer size:    {buffer.capacity:,} transitions")
+    print(f"  Memory usage:   {buffer.memory_usage_mb:.1f} MB")
+    print()
+    
+    # Verify all on same device
+    all_devices = [
+        next(sac.actor.parameters()).device,
+        next(sac.critic_1.parameters()).device,
+        buffer.states.device,
+    ]
+    all_same = all(str(d) == str(all_devices[0]) for d in all_devices)
+    
+    if all_same and "cuda" in str(all_devices[0]):
+        print("✓ All components are on GPU!")
+    elif all_same:
+        print("⚠ All components are on CPU (no GPU acceleration)")
+    else:
+        print("✗ ERROR: Components are on different devices!")
+    
+    print("="*60 + "\n")
 
 def make_env():
     """Factory function to create a HockeyEnv instance."""
@@ -20,6 +87,10 @@ def make_env():
     return _init
 
 def train(config, checkpoint=None):
+    # Print GPU diagnostics at startup
+    print_gpu_info()
+    
+    device = config["training"]["device"]
     num_envs = config["training"]["num_envs"]
     
     # Create vectorized environment with callable factories
@@ -29,10 +100,13 @@ def train(config, checkpoint=None):
     obs_dim = envs.single_observation_space.shape[0]
     action_dim = 4  # HockeyEnv uses 4 actions per player
 
-    buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim, device=config["training"]["device"])
+    buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim, device=device)
     sac = SAC(buffer, obs_dim, action_dim, config["sac"]["hidden_dim"], 
             config["sac"]["lr"], config["sac"]["gamma"], config["sac"]["tau"], 
-            config["sac"]["alpha"], config["training"]["device"])
+            config["sac"]["alpha"], device)
+    
+    # Verify everything is on GPU
+    verify_gpu_setup(sac, buffer, device)
 
     if checkpoint is not None:
         print(f"Loading checkpoint from {checkpoint}")
