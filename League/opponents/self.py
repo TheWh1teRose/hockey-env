@@ -46,7 +46,8 @@ class SelfPlayOpponent(Opponent):
             if is_single:
                 actions = actions.squeeze(0)
             
-            return actions
+            # Convert GPU tensor to numpy for environment
+            return actions.cpu().numpy()
 
     def _load_actor(self,checkpoint_path: str, device: str) -> Actor:
         """Load only the actor network from a checkpoint."""
