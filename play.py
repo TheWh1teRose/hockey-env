@@ -12,7 +12,6 @@ import numpy as np
 import torch
 import hockey.hockey_env as h_env
 from SAC.models import Actor
-from SAC.helpers import normalize_obs
 from League.opponent import Opponent
 from League.opponents.self import SelfPlayOpponent
 from League.opponents.handcrafted import HandcraftedOpponent
@@ -51,7 +50,6 @@ def play(
         for i in range(games):
             episode += 1
             obs, info = env.reset()
-            obs = normalize_obs(obs)
             
             done = False
             episode_reward = 0
@@ -63,7 +61,7 @@ def play(
                     env.render()
                 
                 # Get agent action
-                action_1 = opponent.act(obs)
+                action_1 = player.act(obs)
                 
                 # Get opponent action
                 obs_agent2 = env.obs_agent_two()
@@ -72,7 +70,6 @@ def play(
                 # Combine actions and step
                 env_action = np.hstack([action_1, action_2])
                 next_obs, reward, terminated, truncated, info = env.step(env_action)
-                next_obs = normalize_obs(next_obs)
                 
                 episode_reward += reward
                 obs = next_obs
@@ -159,15 +156,16 @@ def main():
         opponent_type = args.opponent
     else:
         config_opponent = config["init_opponents"][0]
-        if config_opponent["type"] == "self":
+        if config_opponent["type"] == "checkpoint":
             opponent_type = "self"
             opponent = SelfPlayOpponent("opponent", config_opponent["model_path"], config["training"]["device"])
-        elif config_opponent["type"] == "basic_weak":
-            opponent_type = "basic_weak"
-            opponent = HandcraftedOpponent("opponent", "weak")
-        elif config_opponent["type"] == "basic_strong":
-            opponent_type = "basic_strong"
-            opponent = HandcraftedOpponent("opponent", "strong")
+        elif config_opponent["type"] == "handcrafted":
+            if config_opponent["strength"] == "weak":
+                opponent_type = "basic_weak"
+                opponent = HandcraftedOpponent("opponent", "weak")
+            elif config_opponent["strength"] == "strong":
+                opponent_type = "basic_strong"
+                opponent = HandcraftedOpponent("opponent", "strong")
         else:
             raise ValueError(f"Unknown opponent type: {config_opponent['type']}")
 

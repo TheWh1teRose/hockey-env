@@ -242,7 +242,7 @@ class WandBRecorder:
             "episode/length": length,
             "episode/rolling_reward": rolling_reward,
             "episode/rolling_win_rate": rolling_win_rate,
-            f"opponents/{opponent}_winrate": extra_metrics.win_rate,
+            f"opponents/{opponent}_winrate": extra_metrics["win_rate"],
         }
         
         # Log environment info metrics if provided

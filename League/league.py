@@ -14,7 +14,7 @@ class League:
     def __init__(self, config: dict):
         self.config = config
         self.opponents = []
-        self.scores = {}
+        self.win_rates = {}
         
         self.current_opponent = None
 
@@ -46,29 +46,37 @@ class League:
         return self.current_opponent.act(obs)
 
     def add_opponent(self, opponent: Opponent):
-        self.scores[opponent.get_name()] = {}
-        for opponent2 in self.opponents:
-            if opponent.get_name() != opponent2.get_name():
-                wins, losses, draws = play(
-                    player=opponent,
-                    opponent=opponent2,
-                    games=100,
-                    headless=True
-                )
-                win_rate = wins / (wins + losses + draws)
-                losse_rate = losses / (wins + losses + draws)
-                self.scores[opponent.get_name()][opponent2.get_name()] = win_rate
-
-                if opponent2.get_name() in self.scores:
-                    self.scores[opponent2.get_name()][opponent.get_name()] = losse_rate
-
+        self.win_rates[opponent.get_name()] = 1
+        
         self.opponents.append(opponent)
 
-        print(self.scores)
-
     def new_opponent(self):
-        self.current_opponent = random.choice(self.opponents)
+        weights = []
+
+        for opponent_name, p in self.win_rates.items():
+            pfsp_w = p * (1 - p)
+            hard_w = (1 - p) * 3
+            radnom_w = 1
+
+            weights.append(pfsp_w + hard_w + radnom_w)
+        
+        self.current_opponent = random.choices(self.opponents, weights=weights, k=1)[0]
         print(f"New opponent: {self.current_opponent.get_name()}")
     
     def get_opponent_name(self):
         return self.current_opponent.get_name()
+    
+    def calculate_matchmaking(self, current_agent: Opponent):
+        for opponent in self.opponents:
+            wins, losses, draws = play(
+                player=current_agent,
+                opponent=opponent,
+                games=100,
+                headless=True
+            )
+            win_rate = wins / (wins + losses + draws)
+            self.win_rates[opponent.get_name()] = win_rate
+
+        print(self.win_rates)
+
+

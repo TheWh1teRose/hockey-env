@@ -191,6 +191,10 @@ def train(config, checkpoint=None):
             }
         )
 
+        if episode % config["training"]["cal_matchmaking_freq"] == 0 and episode > 0:
+            actor = copy.deepcopy(sac.actor)
+            league.calculate_matchmaking(SelfPlayOpponent(name=f"opponent_{episode}", Actor=actor))
+
         # Reset all envs at end of episode
         obs, info = envs.reset()
         obs = normalize_obs(obs)
