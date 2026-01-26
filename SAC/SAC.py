@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 from .models import Actor, Critic
 import copy
 from .replay_buffer import PrioritizedReplayBuffer
@@ -22,14 +23,13 @@ class SAC:
         self.target_critic_1 = copy.deepcopy(self.critic_1).to(device)
         self.target_critic_2 = copy.deepcopy(self.critic_2).to(device)
         
-        # Apply torch.compile() for JIT optimization (PyTorch 2.0+)
         if use_compile and hasattr(torch, 'compile'):
             print("Applying torch.compile() to networks...")
-            self.actor = torch.compile(self.actor, mode="reduce-overhead")
-            self.critic_1 = torch.compile(self.critic_1, mode="reduce-overhead")
-            self.critic_2 = torch.compile(self.critic_2, mode="reduce-overhead")
-            self.target_critic_1 = torch.compile(self.target_critic_1, mode="reduce-overhead")
-            self.target_critic_2 = torch.compile(self.target_critic_2, mode="reduce-overhead")
+            self.actor = torch.compile(self.actor, mode="default")
+            self.critic_1 = torch.compile(self.critic_1, mode="default")
+            self.critic_2 = torch.compile(self.critic_2, mode="default")
+            self.target_critic_1 = torch.compile(self.target_critic_1, mode="default")
+            self.target_critic_2 = torch.compile(self.target_critic_2, mode="default")
         
         self.alpha = alpha
         self.log_alpha = torch.nn.Parameter(torch.tensor(np.log(alpha), device=device))
@@ -86,7 +86,7 @@ class SAC:
 
         # Critic update with mixed precision
         with torch.no_grad():
-            with autocast(enabled=self.use_amp):
+            with autocast('cuda', enabled=self.use_amp):
                 next_action, next_log_prob = self.actor.sample_with_logprob(next_state)
                 q1_t = self.target_critic_1(next_state, next_action)
                 q2_t = self.target_critic_2(next_state, next_action)
@@ -95,7 +95,7 @@ class SAC:
                 next_q_t = min_q_t - alpha * next_log_prob
                 target_q_t = reward + (1 - done) * self.gamma * next_q_t
         
-        with autocast(enabled=self.use_amp):
+        with autocast('cuda', enabled=self.use_amp):
             q1_val = self.critic_1(state, action)
             q2_val = self.critic_2(state, action)
 
@@ -124,7 +124,7 @@ class SAC:
         self.scaler.step(self.critic_2_optimizer)
 
         # Actor update with mixed precision
-        with autocast(enabled=self.use_amp):
+        with autocast('cuda', enabled=self.use_amp):
             a_pi, logp_pi = self.actor.sample_with_logprob(state)
             q1_pi = self.critic_1(state, a_pi)
             q2_pi = self.critic_2(state, a_pi)
@@ -170,7 +170,7 @@ class SAC:
                 state = torch.from_numpy(state).float().to(self.device, non_blocking=True)
             else:
                 state = state.to(self.device, non_blocking=True)
-            with autocast(enabled=self.use_amp):
+            with autocast('cuda', enabled=self.use_amp):
                 action, _ = self.actor.sample_with_logprob(state)
             return action.cpu().numpy()
 
