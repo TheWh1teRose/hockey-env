@@ -550,13 +550,23 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         weights = (self.size * probs[indices]) ** (-self.beta)
         weights /= weights.max()  # Normalize
         
-        # Use pin_memory and non_blocking for faster transfer
-        weights = torch.from_numpy(weights.astype(np.float32)).pin_memory().to(self.device, non_blocking=True).unsqueeze(1)
+        # Use pin_memory and non_blocking for faster transfer (only if CUDA available)
+        use_pin = self.device.type == 'cuda'
+        weights = torch.from_numpy(weights.astype(np.float32))
+        if use_pin:
+            weights = weights.pin_memory().to(self.device, non_blocking=True)
+        else:
+            weights = weights.to(self.device)
+        weights = weights.unsqueeze(1)
         
         # Increment beta
         self.beta = min(1.0, self.beta + self.beta_increment)
         
-        indices_tensor = torch.from_numpy(indices.astype(np.int64)).pin_memory().to(self.device, non_blocking=True)
+        indices_tensor = torch.from_numpy(indices.astype(np.int64))
+        if use_pin:
+            indices_tensor = indices_tensor.pin_memory().to(self.device, non_blocking=True)
+        else:
+            indices_tensor = indices_tensor.to(self.device)
         
         return (
             self.states[indices_tensor],

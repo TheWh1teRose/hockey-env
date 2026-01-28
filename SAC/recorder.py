@@ -105,6 +105,10 @@ class WandBRecorder:
         self._recent_wins: List[int] = []
         self._rolling_window = 20
         
+        # Exploiter rolling stats (separate tracking)
+        self._exploiter_recent_rewards: List[float] = []
+        self._exploiter_recent_wins: List[int] = []
+        
         # Custom loggers for extensibility
         self.custom_loggers: Dict[str, Callable] = {}
         
@@ -113,6 +117,7 @@ class WandBRecorder:
         wandb.define_metric("episode/*", step_metric="episode")
         wandb.define_metric("buffer/*", step_metric="episode")
         wandb.define_metric("system/*", step_metric="episode")
+        wandb.define_metric("exploiter/*", step_metric="exploiter_episode")
     
     def log_step(
         self,
@@ -470,6 +475,107 @@ class WandBRecorder:
             log_freq: How often to log
         """
         wandb.watch(model, log=log, log_freq=log_freq)
+    
+    def log_exploiter_update(
+        self,
+        episode: int,
+        actor_loss: float,
+        critic_loss: float,
+        alpha_loss: float,
+        alpha: Optional[float] = None,
+        q1_mean: Optional[float] = None,
+        q2_mean: Optional[float] = None,
+        extra_metrics: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """
+        Log exploiter SAC update losses and related metrics.
+        
+        Args:
+            episode: Current exploiter episode counter
+            actor_loss: Actor network loss
+            critic_loss: Critic network loss
+            alpha_loss: Entropy coefficient loss
+            alpha: Current entropy coefficient value
+            q1_mean: Mean Q1 value (optional)
+            q2_mean: Mean Q2 value (optional)
+            extra_metrics: Additional metrics to log
+        """
+        log_dict = {
+            "exploiter_episode": episode,
+            "exploiter/actor_loss": actor_loss,
+            "exploiter/critic_loss": critic_loss,
+            "exploiter/alpha_loss": alpha_loss,
+        }
+        
+        if alpha is not None:
+            log_dict["exploiter/alpha"] = alpha if isinstance(alpha, float) else alpha.item()
+        
+        if q1_mean is not None:
+            log_dict["exploiter/q1_mean"] = q1_mean
+        
+        if q2_mean is not None:
+            log_dict["exploiter/q2_mean"] = q2_mean
+        
+        if extra_metrics:
+            for key, value in extra_metrics.items():
+                log_dict[f"exploiter/{key}"] = value
+        
+        wandb.log(log_dict)
+    
+    def log_exploiter_episode(
+        self,
+        episode: int,
+        reward: float,
+        length: int,
+        winner: int = 0,
+        info: Optional[Dict[str, Any]] = None,
+        extra_metrics: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """
+        Log exploiter episode summary metrics.
+        
+        Args:
+            episode: Episode number
+            reward: Total episode reward
+            length: Episode length (number of steps)
+            winner: Game outcome (1=win, -1=loss, 0=draw)
+            info: Environment info dict with proxy rewards
+            extra_metrics: Additional metrics to log
+        """
+        # Update exploiter rolling stats
+        self._exploiter_recent_rewards.append(reward)
+        self._exploiter_recent_wins.append(1 if winner == 1 else 0)
+        
+        if len(self._exploiter_recent_rewards) > self._rolling_window:
+            self._exploiter_recent_rewards.pop(0)
+            self._exploiter_recent_wins.pop(0)
+        
+        # Calculate rolling statistics
+        rolling_reward = np.mean(self._exploiter_recent_rewards)
+        rolling_win_rate = np.mean(self._exploiter_recent_wins) if self._exploiter_recent_wins else 0.0
+        
+        log_dict = {
+            "exploiter_episode": episode,
+            "exploiter/reward": reward,
+            "exploiter/length": length,
+            "exploiter/rolling_reward": rolling_reward,
+            "exploiter/rolling_win_rate": rolling_win_rate,
+        }
+        
+        # Log environment info metrics if provided
+        if info:
+            if "reward_closeness_to_puck" in info:
+                log_dict["exploiter/closeness_to_puck"] = info["reward_closeness_to_puck"]
+            if "reward_touch_puck" in info:
+                log_dict["exploiter/touch_puck"] = info["reward_touch_puck"]
+            if "reward_puck_direction" in info:
+                log_dict["exploiter/puck_direction"] = info["reward_puck_direction"]
+        
+        if extra_metrics:
+            for key, value in extra_metrics.items():
+                log_dict[f"exploiter/{key}"] = value
+        
+        wandb.log(log_dict)
     
     def finish(self, quiet: bool = False) -> None:
         """

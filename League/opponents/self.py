@@ -51,9 +51,12 @@ class SelfPlayOpponent(Opponent):
 
     def _load_actor(self,checkpoint_path: str, device: str) -> Actor:
         """Load only the actor network from a checkpoint."""
-        state_dim = 18
-        action_dim = 4
-        hidden_dim = 128
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        
+        hidden_dim = checkpoint['actor']['fc1.weight'].shape[0]
+        state_dim = checkpoint['actor']['fc1.weight'].shape[1]
+        action_dim = checkpoint['actor']['fc3.weight'].shape[0]
+    
         actor = Actor(state_dim, action_dim, hidden_dim).to(device)
         checkpoint = torch.load(checkpoint_path, map_location=device)
         actor.load_state_dict(checkpoint['actor'])
