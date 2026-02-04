@@ -160,7 +160,7 @@ def train(config, checkpoint=None):
             obs = next_obs
 
             # Update SAC and accumulate metrics
-            if buffer.is_ready(config["buffer"]["min_size"]):
+            if buffer.is_ready(max(config["buffer"]["min_size"], sac.batch_size)):
                 metrics = sac.update()
                 for key in episode_metrics:
                     episode_metrics[key].append(metrics[key])
@@ -372,7 +372,7 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
             obs = next_obs
 
             # Update SAC and accumulate metrics
-            if buffer.is_ready(config["buffer"]["min_size"]):
+            if buffer.is_ready(max(config["buffer"]["min_size"], sac.batch_size)):
                 metrics = sac.update()
                 for key in episode_metrics:
                     episode_metrics[key].append(metrics[key])
