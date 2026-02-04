@@ -59,13 +59,21 @@ class League:
 
         for opponent_name, p in self.win_rates.items():
             pfsp_w = p * (1 - p)
-            hard_w = (1 - p) * 3
+            hard_w = (1 - p) * 1
             radnom_w = 1
+        
+            is_solved = int(p > 0.85)
 
-            weights.append(pfsp_w + hard_w + radnom_w)
+            weights.append((pfsp_w + hard_w + radnom_w) * (1 - is_solved))
         
         self.current_opponent = random.choices(self.opponents, weights=weights, k=1)[0]
         print(f"New opponent: {self.current_opponent.get_name()}")
+
+    def is_solved(self):
+        for opponent_name, p in self.win_rates.items():
+            if p < 0.85:
+                return False
+        return True
     
     def get_opponent_name(self):
         return self.current_opponent.get_name()

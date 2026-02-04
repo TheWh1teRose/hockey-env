@@ -13,6 +13,8 @@ from League.league import League
 from League.opponents.self import SelfPlayOpponent
 import copy
 import threading
+import random
+import time
 
 
 def make_env():
@@ -68,18 +70,23 @@ def train(config, checkpoint=None):
         notes="SAC training with parallel environments",
     )
 
-    # start exploiter training thread
-    exploiter_running = threading.Event()
-    exploiter_running.set()
+    # Start multiple exploiter training threads as specified in config
+    num_exploiters = config["training"].get("num_exploiters", 1)
+    exploiter_runnings = []
+    exploiter_threads = []
+    main_episodes = [0]  # shared variable to track main episodes
 
-    main_episodes = [0] # shared variable to track main episodes
-
-    exploiter_thread = threading.Thread(
-        target=train_expoiter,
-        args=(config, sac, league, recorder, main_episodes, exploiter_running),
-        daemon=True
-    )
-    exploiter_thread.start()
+    for i in range(num_exploiters):
+        exploiter_running = threading.Event()
+        exploiter_running.set()
+        exploiter_runnings.append(exploiter_running)
+        exploiter_thread = threading.Thread(
+            target=train_expoiter,
+            args=(config, sac, league, recorder, main_episodes, exploiter_running),
+            daemon=True
+        )
+        exploiter_thread.start()
+        exploiter_threads.append(exploiter_thread)
 
     obs, info = envs.reset()
     obs = normalize_obs(obs)
@@ -115,6 +122,14 @@ def train(config, checkpoint=None):
             "reward_touch_puck": 0.0,
             "reward_puck_direction": 0.0,
         }
+
+        if league.is_solved():
+            print("League is solved, calculating matchmaking")
+            league.calculate_matchmaking()
+            while league.is_solved():
+                time.sleep(600)
+                league.calculate_matchmaking()
+
 
         for step in range(config["training"]["episode_length"]):
             episode_length += 1
@@ -256,19 +271,41 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
 
     buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim, device=device)
     gpu_config = config.get("gpu_optimization", {})
-    sac = SAC(
-        buffer, obs_dim, action_dim, 
-        config["sac"]["hidden_dim"], 
-        config["sac"]["lr"], 
-        config["sac"]["gamma"], 
-        config["sac"]["tau"], 
-        config["sac"]["alpha"], 
-        device,
-        batch_size=config["buffer"].get("batch_size", 512),
-        use_amp=gpu_config.get("use_amp", True),
-        use_compile=gpu_config.get("use_compile", True),
-        updates_per_step=gpu_config.get("updates_per_step", 4)
-    )
+
+    should_copy_main_agent = random.random() < 0.5
+    if should_copy_main_agent:
+        print("Copying main agent")
+        sac = copy.deepcopy(main_agent_sac)
+    else:
+        should_mutate = random.random() < 0.5
+        hidden_dim = config["sac"]["hidden_dim"]
+        lr = config["sac"]["lr"]
+        gamma = config["sac"]["gamma"]
+        tau = config["sac"]["tau"]
+        alpha = config["sac"]["alpha"]
+        
+        if should_mutate:
+            hidden_dim = random.randint(hidden_dim // 2, hidden_dim * 2)
+            lr = random.uniform(lr * 0.8, lr * 1.2)
+            gamma = random.uniform(gamma * 0.8, gamma * 1.2)
+            tau = random.uniform(tau * 0.8, tau * 1.2)
+            alpha = random.uniform(alpha * 0.8, alpha * 1.2)
+            print(f"Mutated SAC: hidden_dim={hidden_dim}, lr={lr}, gamma={gamma}, tau={tau}, alpha={alpha}")
+
+        print("Creating new SAC")
+        sac = SAC(
+            buffer, obs_dim, action_dim, 
+            hidden_dim, 
+            lr, 
+            gamma, 
+            tau, 
+            alpha, 
+            device,
+            batch_size=config["buffer"].get("batch_size", 512),
+            use_amp=gpu_config.get("use_amp", True),
+            use_compile=gpu_config.get("use_compile", True),
+            updates_per_step=gpu_config.get("updates_per_step", 4)
+        )
 
     # global statistics
     total_games = 0
@@ -403,7 +440,7 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
         env_lengths[:] = 0
 
         # if winrate is over 0.7 add exploiter to league and reset exploiter
-        if wins / max(total_games, 1) > 0.7 and main_episodes > 20:
+        if wins / max(total_games, 1) > 0.6 and main_episodes > 20:
             actor = copy.deepcopy(sac.actor)
             league.add_opponent(SelfPlayOpponent(name=f"exploiter_{episode}", Actor=actor, device=device))
 
