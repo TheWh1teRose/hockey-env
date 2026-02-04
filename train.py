@@ -276,6 +276,9 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
     if should_copy_main_agent:
         print("Copying main agent")
         sac = copy.deepcopy(main_agent_sac)
+        # Replace the copied buffer with the new empty buffer for the exploiter
+        sac.buffer = buffer
+        sac.is_prioritized_buffer = isinstance(buffer, PrioritizedReplayBuffer)
     else:
         should_mutate = random.random() < 0.5
         hidden_dim = config["sac"]["hidden_dim"]

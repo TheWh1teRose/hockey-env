@@ -538,6 +538,13 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             Tuple of (states, actions, rewards, next_states, dones, weights, indices)
             weights can be used to correct for the bias introduced by prioritized sampling
         """
+        # Safety check: ensure we don't try to sample more than we have
+        if batch_size > self.size:
+            raise ValueError(
+                f"Cannot sample batch_size={batch_size} from buffer with only {self.size} samples. "
+                f"Ensure buffer.is_ready(batch_size) is checked before sampling."
+            )
+        
         # Calculate sampling probabilities
         priorities = self.priorities[:self.size]
         probs = priorities ** self.alpha
