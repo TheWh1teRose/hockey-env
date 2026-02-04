@@ -50,7 +50,7 @@ class League:
         return self.current_opponent.act(obs)
 
     def add_opponent(self, opponent: Opponent):
-        self.win_rates[opponent.get_name()] = 1
+        self.win_rates[opponent.get_name()] = 0.5
         
         self.opponents.append(opponent)
 
@@ -60,12 +60,15 @@ class League:
         for opponent_name, p in self.win_rates.items():
             pfsp_w = p * (1 - p)
             hard_w = (1 - p) * 1
-            radnom_w = 1
+            radnom_w = 0.2
         
             is_solved = int(p > 0.85)
 
             weights.append((pfsp_w + hard_w + radnom_w) * (1 - is_solved))
         
+        if sum(weights) == 0:
+            print("No opponents to choose from, returning current opponent")
+            return
         self.current_opponent = random.choices(self.opponents, weights=weights, k=1)[0]
         print(f"New opponent: {self.current_opponent.get_name()}")
 
