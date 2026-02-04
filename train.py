@@ -82,7 +82,7 @@ def train(config, checkpoint=None):
         exploiter_runnings.append(exploiter_running)
         exploiter_thread = threading.Thread(
             target=train_expoiter,
-            args=(config, sac, league, recorder, main_episodes, exploiter_running),
+            args=(config, sac, league, recorder, main_episodes, exploiter_running, i),
             daemon=True
         )
         exploiter_thread.start()
@@ -261,7 +261,7 @@ def train(config, checkpoint=None):
     envs.close()
 
 
-def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, running):
+def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, running, exploiter_id):
     num_envs = config["training"]["exploiter"]["num_envs"]
     envs = AsyncVectorEnv([make_env() for _ in range(num_envs)])
     obs_dim = envs.single_observation_space.shape[0]
@@ -269,46 +269,12 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
 
     device = config["training"]["device"]
 
+    times_added = 0
+
     buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim, device=device)
     gpu_config = config.get("gpu_optimization", {})
 
-    should_copy_main_agent = random.random() < 0.5
-    if should_copy_main_agent:
-        print("Copying main agent")
-        sac = copy.deepcopy(main_agent_sac)
-        # Replace the copied buffer with the new empty buffer for the exploiter
-        sac.buffer = buffer
-        sac.is_prioritized_buffer = isinstance(buffer, PrioritizedReplayBuffer)
-    else:
-        should_mutate = random.random() < 0.5
-        hidden_dim = config["sac"]["hidden_dim"]
-        lr = config["sac"]["lr"]
-        gamma = config["sac"]["gamma"]
-        tau = config["sac"]["tau"]
-        alpha = config["sac"]["alpha"]
-        
-        if should_mutate:
-            hidden_dim = random.randint(hidden_dim // 2, hidden_dim * 2)
-            lr = random.uniform(lr * 0.8, lr * 1.2)
-            gamma = random.uniform(gamma * 0.8, gamma * 1.2)
-            tau = random.uniform(tau * 0.8, tau * 1.2)
-            alpha = random.uniform(alpha * 0.8, alpha * 1.2)
-            print(f"Mutated SAC: hidden_dim={hidden_dim}, lr={lr}, gamma={gamma}, tau={tau}, alpha={alpha}")
-
-        print("Creating new SAC")
-        sac = SAC(
-            buffer, obs_dim, action_dim, 
-            hidden_dim, 
-            lr, 
-            gamma, 
-            tau, 
-            alpha, 
-            device,
-            batch_size=config["buffer"].get("batch_size", 512),
-            use_amp=gpu_config.get("use_amp", True),
-            use_compile=gpu_config.get("use_compile", True),
-            updates_per_step=gpu_config.get("updates_per_step", 4)
-        )
+    sac = _create_exploiter_sac(config, gpu_config, buffer, obs_dim, action_dim, device, exploiter_id, main_agent_sac)
 
     # global statistics
     total_games = 0
@@ -324,7 +290,7 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
     obs, info = envs.reset()
     obs = normalize_obs(obs)
 
-    print(f"Exploiter training started")
+    print(f"Exploiter {exploiter_id} training started")
 
     while running.is_set():
         episode += 1
@@ -404,6 +370,7 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
         # Log accumulated training metrics for exploiter
         if episode_metrics["actor_loss"]:
             recorder.log_exploiter_update(
+                exploiter_id=exploiter_id,
                 episode=episode,
                 actor_loss=np.mean(episode_metrics["actor_loss"]),
                 critic_loss=np.mean(episode_metrics["critic_loss"]),
@@ -418,6 +385,7 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
 
         # Log episode metrics for exploiter
         recorder.log_exploiter_episode(
+            exploiter_id=exploiter_id,
             episode=episode,
             reward=episode_total_reward,
             length=episode_length * num_envs,
@@ -443,21 +411,23 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
         env_lengths[:] = 0
 
         # if winrate is over 0.7 add exploiter to league and reset exploiter
-        if wins / max(total_games, 1) > 0.6 and main_episodes > 20:
+        if (wins / max(total_games, 1) > 0.6 and main_episodes > 20) or (episode > 100):
+            times_added += 1
             actor = copy.deepcopy(sac.actor)
-            league.add_opponent(SelfPlayOpponent(name=f"exploiter_{episode}", Actor=actor, device=device))
+            league.add_opponent(SelfPlayOpponent(name=f"exploiter_{exploiter_id}_{times_added}", Actor=actor, device=device))
 
-            print(f"Exploiter {episode} added to league")
+            print(f"Exploiter {exploiter_id} (episode {episode}) added to league")
 
-            sac.save(f"checkpoints/exploiter_{episode}.pt")
-            print(f"Exploiter {episode} checkpoint saved")
+            sac.save(f"checkpoints/exploiter_{exploiter_id}_{episode}.pt")
+            print(f"Exploiter {exploiter_id} (episode {episode}) checkpoint saved")
 
             total_games = 0
             wins = 0
             losses = 0
             draws = 0
-            sac = SAC(buffer, obs_dim, action_dim, config["sac"]["hidden_dim"], config["sac"]["lr"], config["sac"]["gamma"], config["sac"]["tau"], config["sac"]["alpha"], device, batch_size=config["buffer"].get("batch_size", 512), use_amp=gpu_config.get("use_amp", True), use_compile=gpu_config.get("use_compile", True), updates_per_step=gpu_config.get("updates_per_step", 4))
-
+            buffer = PrioritizedReplayBuffer(config["buffer"]["size"], obs_dim, action_dim, device=device)
+            sac = _create_exploiter_sac(config, gpu_config, buffer, obs_dim, action_dim, device, exploiter_id, main_agent_sac)
+        
         # Reset per-episode stats
         total_games = 0
         wins = 0
@@ -465,6 +435,47 @@ def train_expoiter(config, main_agent_sac, league, recorder, main_episodes, runn
         draws = 0
 
     envs.close()
+
+
+def _create_exploiter_sac(config, gpu_config, buffer, obs_dim, action_dim, device, exploiter_id, main_agent_sac):
+    should_copy_main_agent = random.random() < 0.5
+    if should_copy_main_agent:
+        print(f"Exploiter {exploiter_id}: Copying main agent")
+        sac = copy.deepcopy(main_agent_sac)
+        # Replace the copied buffer with the new empty buffer for the exploiter
+        sac.buffer = buffer
+        sac.is_prioritized_buffer = isinstance(buffer, PrioritizedReplayBuffer)
+    else:
+        should_mutate = random.random() < 0.5
+        hidden_dim = config["sac"]["hidden_dim"]
+        lr = config["sac"]["lr"]
+        gamma = config["sac"]["gamma"]
+        tau = config["sac"]["tau"]
+        alpha = config["sac"]["alpha"]
+        
+        if should_mutate:
+            hidden_dim = random.randint(hidden_dim // 2, hidden_dim * 2)
+            lr = random.uniform(lr * 0.8, lr * 1.2)
+            gamma = random.uniform(gamma * 0.8, gamma * 1.2)
+            tau = random.uniform(tau * 0.8, tau * 1.2)
+            alpha = random.uniform(alpha * 0.8, alpha * 1.2)
+            print(f"Exploiter {exploiter_id}: Mutated SAC: hidden_dim={hidden_dim}, lr={lr}, gamma={gamma}, tau={tau}, alpha={alpha}")
+
+        print(f"Exploiter {exploiter_id}: Creating new SAC")
+        sac = SAC(
+            buffer, obs_dim, action_dim, 
+            hidden_dim, 
+            lr, 
+            gamma, 
+            tau, 
+            alpha, 
+            device,
+            batch_size=config["buffer"].get("batch_size", 512),
+            use_amp=gpu_config.get("use_amp", True),
+            use_compile=gpu_config.get("use_compile", True),
+            updates_per_step=gpu_config.get("updates_per_step", 4)
+        )
+    return sac
 
 if __name__ == "__main__":
 
